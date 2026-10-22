@@ -1,0 +1,36 @@
+{
+  "id": "evt_test_1PortfolioDemo0001",
+  "object": "event",
+  "type": "checkout.session.completed",
+  "created": 1761120000,
+  "livemode": false,
+  "data": {
+    "object": {
+      "id": "cs_test_a1PortfolioDemoSession0001",
+      "object": "checkout.session",
+      "mode": "subscription",
+      "payment_status": "paid",
+      "status": "complete",
+      "amount_total": 150000,
+      "currency": "usd",
+      "customer": "cus_TestPortfolio001",
+      "subscription": "sub_TestPortfolio001",
+      "customer_email": null,
+      "customer_details": {
+        "email": "Jane.Doe@AcmeGrowth.io",
+        "name": "Jane Doe"
+      },
+      "custom_fields": [
+        {
+          "key": "company",
+          "label": { "custom": "Company name", "type": "custom" },
+          "type": "text",
+          "text": { "value": "Acme Growth Ltd." }
+        }
+      ],
+      "metadata": {
+        "plan_name": "Outbound Growth – Monthly"
+      }
+    }
+  }
+}

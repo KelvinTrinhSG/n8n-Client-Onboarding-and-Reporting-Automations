@@ -1,0 +1,82 @@
+{
+  "id": "SYS02NotifyTgm00",
+  "name": "[SYS-02] Notify Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "0c6290fb-f6a0-573b-9873-96b0a1a3db73",
+      "name": "When Called by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// === CONFIG: Telegram chat IDs ===\n// Find a chat ID: add the bot to the group, send a message, then open\n// https://api.telegram.org/bot<TOKEN>/getUpdates  (group IDs start with -100)\nconst CHATS = {\n  alerts: 'REPLACE_WITH_TELEGRAM_ALERTS_CHAT_ID',\n  errors: 'REPLACE_WITH_TELEGRAM_ERRORS_CHAT_ID',\n};\n\n// Input: { chat: 'alerts' | 'errors', text: string }\nreturn $input.all().map(item => {\n  const { chat = 'alerts', text = '' } = item.json;\n  const chatId = CHATS[chat];\n  if (!chatId) throw new Error(`Unknown Telegram chat \"${chat}\"`);\n  if (!text) throw new Error('Telegram message text is empty');\n  return { json: { chat_id: chatId, text: text.length > 4000 ? text.slice(0, 3990) + '…' : text } };\n});\n"
+      },
+      "id": "0f550d70-6695-5ead-a68a-ab1f12369138",
+      "name": "Resolve Chat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "2b30228b-9a1b-5b83-8f92-63135eb79297",
+      "name": "Telegram: Send",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "When Called by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Resolve Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Chat": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "SYS01ErrHandler0"
+  },
+  "active": false,
+  "pinData": {}
+}

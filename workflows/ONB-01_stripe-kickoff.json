@@ -1,0 +1,646 @@
+{
+  "id": "ONB01StripeKick0",
+  "name": "[ONB-01] Stripe Payment → Kickoff",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## [ONB-01] Stripe Payment → Kickoff\nTrigger: Stripe `checkout.session.completed` (paid only, duplicates removed).\n\n1. Add client to **Client Registry** (status `provisioning`)\n2. **ClickUp** task from template (+ optional custom fields)\n3. **Slack** channel → Slack Connect invite (if enabled) → welcome message\n4. **Gmail** welcome email\n5. Update registry (`onboarding` or `needs_attention`)\n6. **Telegram** alert via SYS-02\n\nSlack and email failures do not stop the run: they are listed in the Telegram alert and in the `notes` column. Any other failure goes to SYS-01.\n\nEdit the **Config** node after import.",
+        "height": 360,
+        "width": 520
+      },
+      "id": "1e9c9d2e-ddc0-5b5c-8b66-dc8656849e8a",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "events": [
+          "checkout.session.completed"
+        ]
+      },
+      "id": "36f64e3f-021b-5eb5-a375-86d43d90be6d",
+      "name": "Stripe Trigger",
+      "type": "n8n-nodes-base.stripeTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "logic": "removeItemsWithAlreadySeenKeyValues",
+        "dedupeValue": "={{ $json.id }}",
+        "options": {}
+      },
+      "id": "6bf77b12-0dcc-5827-9876-0fc78d436dc2",
+      "name": "Remove Duplicate Events",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8d8e713b-ab12-5adf-87a0-ea97cea152d8",
+              "leftValue": "={{ $json.data.object.payment_status }}",
+              "rightValue": "paid",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "734690f9-5ff1-5294-a017-08f883ff165b",
+      "name": "Only Paid",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =====================================================================\n// CONFIG: edit after import. No secrets here (API keys live in n8n credentials).\n// =====================================================================\nconst config = {\n  // Client Registry (Google Sheet). ID = the long string in the Sheet URL.\n  registry_sheet_id: 'REPLACE_WITH_GOOGLE_SHEET_ID',\n  registry_tab: 'Clients',\n\n  // ClickUp\n  clickup_list_id: 'REPLACE_WITH_CLICKUP_LIST_ID',\n  clickup_template_id: 'REPLACE_WITH_CLICKUP_TASK_TEMPLATE_ID',\n  // Optional custom field IDs (GET /api/v2/list/{list_id}/field). Leave '' to skip.\n  clickup_custom_fields: {\n    client_id: '',\n    contact_email: '',\n    plan_name: '',\n    amount: '',\n    paid_at: '', // must be a Date field\n  },\n\n  // Slack\n  // false = demo on a free Slack plan: create a normal channel and put the workspace\n  //         invite link in the welcome email instead of sending a Slack Connect invite.\n  slack_connect_enabled: false,\n  slack_workspace_invite_url: 'REPLACE_WITH_SLACK_WORKSPACE_INVITE_LINK',\n  slack_channel_prefix: 'client-',\n\n  // Stripe Payment Link\n  company_custom_field_key: 'company', // key of the \"Company name\" custom field\n  default_plan_name: 'Growth Plan',    // used when the Payment Link has no metadata.plan_name\n\n  // Messages\n  agency_name: 'Your Agency',\n  sender_name: 'Your Agency Team',\n  onboarding_form_url: 'REPLACE_WITH_ONBOARDING_FORM_URL',\n  booking_url: 'REPLACE_WITH_CALENDLY_OR_CALCOM_URL',\n};\n\nreturn [{ json: { config, event: $input.first().json } }];\n"
+      },
+      "id": "74aee290-82a2-5f3e-b294-cdfae82ae281",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turns the Stripe checkout.session.completed event into one Client Registry row.\n// Every key below must exist as a column header in the Clients sheet.\nconst { config, event } = $input.first().json;\nconst s = event.data?.object ?? {};\nconst details = s.customer_details ?? {};\n\nconst email = (details.email || s.customer_email || '').toLowerCase();\nif (!email) throw new Error(`Checkout session ${s.id} has no customer email`);\n\nconst companyField = (s.custom_fields ?? []).find(f => f.key === config.company_custom_field_key);\nconst contactName = details.name || '';\n\nreturn [{\n  json: {\n    client_id: 'CL-' + $now.toFormat('yyMMdd-HHmmss'),\n    status: 'provisioning',\n    company_name: companyField?.text?.value || contactName || email,\n    contact_name: contactName,\n    contact_email: email,\n    plan_name: s.metadata?.plan_name || config.default_plan_name,\n    amount: (s.amount_total ?? 0) / 100,\n    currency: (s.currency || '').toUpperCase(),\n    paid_at: new Date((event.created ?? Date.now() / 1000) * 1000).toISOString(),\n    stripe_customer_id: s.customer || '',\n    stripe_subscription_id: s.subscription || '',\n    stripe_session_id: s.id || '',\n  },\n}];\n"
+      },
+      "id": "53d92828-18ba-5216-b9e0-2e29dcc9a916",
+      "name": "Normalize Client",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.config.registry_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Config').first().json.config.registry_tab }}"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "145b88d9-2c40-53ad-9974-a2288503fde6",
+      "name": "Registry: Add Client",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.clickup.com/api/v2/list/{{ $('Config').first().json.config.clickup_list_id }}/taskTemplate/{{ $('Config').first().json.config.clickup_template_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "clickUpApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $('Normalize Client').first().json.company_name + ' – Onboarding' }) }}",
+        "options": {}
+      },
+      "id": "1f5e60d2-2893-5fd9-bcfc-f6ad9d74ef64",
+      "name": "ClickUp: Create From Template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collects everything the Slack / email steps need, so their expressions stay simple.\nconst config = $('Config').first().json.config;\nconst c = $('Normalize Client').first().json;\nconst res = $input.first().json;\n\nconst taskId = res.id || res.task?.id;\nif (!taskId) throw new Error('ClickUp did not return a task id: ' + JSON.stringify(res).slice(0, 500));\n\nconst slug = c.company_name.toLowerCase()\n  .normalize('NFD').replace(/\\p{Diacritic}/gu, '')\n  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')\n  .slice(0, 60) || 'client';\nconst channelName = `${config.slack_channel_prefix}${slug}-${c.client_id.slice(-6)}`.slice(0, 80);\n\nconst firstName = (c.contact_name || '').split(' ')[0] || 'there';\n\nconst slackWelcome = [\n  `👋 Welcome to ${config.agency_name}, ${firstName}!`,\n  '',\n  'This is the shared channel between your team and ours. Next steps:',\n  `1. Fill in the onboarding form: ${config.onboarding_form_url}`,\n  `2. Book your kickoff call: ${config.booking_url}`,\n  '',\n  'We will post updates and results here. Ask us anything, anytime.',\n].join('\\n');\n\nconst slackLine = config.slack_connect_enabled\n  ? 'You will receive a separate Slack invite to our shared channel. Please accept it within 24 hours.'\n  : `Join our Slack workspace here: <a href=\"${config.slack_workspace_invite_url}\">${config.slack_workspace_invite_url}</a>`;\n\nconst emailHtml = `\n<p>Hi ${firstName},</p>\n<p>Thank you for choosing ${config.agency_name}! Your payment for <b>${c.plan_name}</b> has been received and we have started setting up your account.</p>\n<p><b>Next steps:</b></p>\n<ol>\n  <li>Fill in the onboarding form: <a href=\"${config.onboarding_form_url}\">${config.onboarding_form_url}</a></li>\n  <li>Book your kickoff call: <a href=\"${config.booking_url}\">${config.booking_url}</a></li>\n  <li>${slackLine}</li>\n</ol>\n<p>Talk soon,<br>${config.sender_name}</p>`;\n\nreturn [{\n  json: {\n    client_id: c.client_id,\n    clickup_task_id: taskId,\n    clickup_task_url: `https://app.clickup.com/t/${taskId}`,\n    slack_connect_enabled: config.slack_connect_enabled,\n    slack_channel_name: channelName,\n    slack_welcome_text: slackWelcome,\n    email_subject: `Welcome to ${config.agency_name}, ${firstName}! Your next steps`,\n    email_html: emailHtml,\n  },\n}];\n"
+      },
+      "id": "6de3097b-f5ba-521b-8bcd-901eeafa6265",
+      "name": "Prepare Provisioning",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per configured ClickUp custom field. No IDs configured = no items = branch stops.\nconst config = $('Config').first().json.config;\nconst c = $('Normalize Client').first().json;\nconst { clickup_task_id } = $input.first().json;\n\nconst items = [];\nfor (const [key, fieldId] of Object.entries(config.clickup_custom_fields)) {\n  if (!fieldId) continue;\n  let value = c[key];\n  if (value === undefined || value === '') continue;\n  if (key.endsWith('_at')) value = new Date(value).getTime(); // ClickUp dates are ms timestamps\n  items.push({ json: { task_id: clickup_task_id, field_id: fieldId, value } });\n}\nreturn items;\n"
+      },
+      "id": "873ee8bd-622d-52fc-ba71-44efb6705b78",
+      "name": "Build Custom Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.clickup.com/api/v2/task/{{ $json.task_id }}/field/{{ $json.field_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "clickUpApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ value: $json.value }) }}",
+        "options": {}
+      },
+      "id": "eb0e09b5-d443-5e3c-ab7b-ec27b86b76f9",
+      "name": "ClickUp: Set Custom Field",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        -200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/conversations.create",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $json.slack_channel_name, is_private: false }) }}",
+        "options": {}
+      },
+      "id": "d84c4ab5-de9d-53d4-90e3-2bbc69d198ef",
+      "name": "Slack: Create Channel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "130c801a-ae0f-59f4-99c0-1fe747768008",
+              "leftValue": "={{ $('Prepare Provisioning').first().json.slack_connect_enabled }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2cd9dca1-86c8-547d-bbb9-668f20c0aba7",
+      "name": "Slack Connect Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/conversations.inviteShared",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: $('Slack: Create Channel').first().json.channel?.id, emails: [$('Normalize Client').first().json.contact_email] }) }}",
+        "options": {}
+      },
+      "id": "e8ae78b4-f29e-5165-87a9-1c5113bf2669",
+      "name": "Slack: Invite (Slack Connect)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: $('Slack: Create Channel').first().json.channel?.id, text: $('Prepare Provisioning').first().json.slack_welcome_text }) }}",
+        "options": {}
+      },
+      "id": "948c3a24-6f2f-50b1-ac22-77125c91fbf0",
+      "name": "Slack: Welcome Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Slack returns HTTP 200 with { ok: false } on errors, and the HTTP nodes are set to\n// continue on failure, so collect problems here instead of failing the whole onboarding.\nconst out = (name) => {\n  try { const n = $(name); return n.isExecuted ? n.first().json : null; } catch { return null; }\n};\nconst errText = (r) => typeof r.error === 'string' ? r.error : (r.error?.message || 'unknown error');\n\nconst created = out('Slack: Create Channel');\nconst invite = out('Slack: Invite (Slack Connect)');\nconst welcome = out('Slack: Welcome Message');\n\nconst problems = [];\nfor (const [label, r] of [['Create channel', created], ['Slack Connect invite', invite], ['Welcome message', welcome]]) {\n  if (r && r.ok !== true) problems.push(`Slack ${label}: ${errText(r)}`);\n}\n\nreturn [{\n  json: {\n    slack_channel_id: created?.channel?.id || '',\n    slack_invite_id: invite?.invite_id || '',\n    slack_problems: problems,\n  },\n}];\n"
+      },
+      "id": "35e8a2fa-941a-5865-863f-a1b91e708309",
+      "name": "Slack Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Normalize Client').first().json.contact_email }}",
+        "subject": "={{ $('Prepare Provisioning').first().json.email_subject }}",
+        "emailType": "html",
+        "message": "={{ $('Prepare Provisioning').first().json.email_html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "={{ $('Config').first().json.config.sender_name }}"
+        }
+      },
+      "id": "d0e20e6f-41dc-5931-9407-3f39db3a490c",
+      "name": "Gmail: Welcome Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2860,
+        100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Prepare Provisioning').first().json;\nconst slack = $('Slack Result').first().json;\nconst mail = $input.first().json;\n\nconst problems = [...slack.slack_problems];\nif (!mail.id || mail.error) {\n  problems.push('Welcome email: ' + (typeof mail.error === 'string' ? mail.error : (mail.error?.message || 'not sent')));\n}\n\n// Keys must match column headers in the Clients sheet (matched on client_id).\nreturn [{\n  json: {\n    client_id: p.client_id,\n    status: problems.length ? 'needs_attention' : 'onboarding',\n    clickup_task_id: p.clickup_task_id,\n    clickup_task_url: p.clickup_task_url,\n    slack_channel_id: slack.slack_channel_id,\n    slack_invite_id: slack.slack_invite_id,\n    notes: problems.join(' | '),\n  },\n}];\n"
+      },
+      "id": "0afb499b-7f1e-5e67-a960-f091144299ae",
+      "name": "Build Registry Update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.config.registry_sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Config').first().json.config.registry_tab }}"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "client_id"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "eb7879e2-b09e-5f80-8de7-64a3e9bf2d2d",
+      "name": "Registry: Update Client",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3300,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $('Normalize Client').first().json;\nconst p = $('Prepare Provisioning').first().json;\nconst r = $('Build Registry Update').first().json;\nconst problems = r.notes ? r.notes.split(' | ') : [];\n\nconst lines = [\n  '💰 New client paid',\n  `${c.company_name} – ${c.plan_name} – ${Number(c.amount).toLocaleString('en-US')} ${c.currency}`,\n  `Contact: ${c.contact_name} <${c.contact_email}>`,\n  `Client ID: ${c.client_id}`,\n  `ClickUp: ${p.clickup_task_url}`,\n  `Slack: ${r.slack_channel_id ? '#' + p.slack_channel_name : 'not created'}`,\n];\nif (problems.length) lines.push('', '⚠️ Needs manual action:', ...problems.map(x => '• ' + x));\n\nreturn [{ json: { chat: 'alerts', text: lines.join('\\n') } }];\n"
+      },
+      "id": "3a2102c7-d49c-5d09-a63f-612d0f870b34",
+      "name": "Build Telegram Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "SYS02NotifyTgm00"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "f41d5f46-bf25-5c63-8253-255176c39bbf",
+      "name": "Notify Telegram (SYS-02)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3740,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Stripe Trigger": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicate Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicate Events": {
+      "main": [
+        [
+          {
+            "node": "Only Paid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only Paid": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Normalize Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Client": {
+      "main": [
+        [
+          {
+            "node": "Registry: Add Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registry: Add Client": {
+      "main": [
+        [
+          {
+            "node": "ClickUp: Create From Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ClickUp: Create From Template": {
+      "main": [
+        [
+          {
+            "node": "Prepare Provisioning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Provisioning": {
+      "main": [
+        [
+          {
+            "node": "Build Custom Fields",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack: Create Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Custom Fields": {
+      "main": [
+        [
+          {
+            "node": "ClickUp: Set Custom Field",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: Create Channel": {
+      "main": [
+        [
+          {
+            "node": "Slack Connect Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Connect Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Slack: Invite (Slack Connect)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack: Welcome Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: Invite (Slack Connect)": {
+      "main": [
+        [
+          {
+            "node": "Slack: Welcome Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: Welcome Message": {
+      "main": [
+        [
+          {
+            "node": "Slack Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Result": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Welcome Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: Welcome Email": {
+      "main": [
+        [
+          {
+            "node": "Build Registry Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Registry Update": {
+      "main": [
+        [
+          {
+            "node": "Registry: Update Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registry: Update Client": {
+      "main": [
+        [
+          {
+            "node": "Build Telegram Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Telegram Message": {
+      "main": [
+        [
+          {
+            "node": "Notify Telegram (SYS-02)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "SYS01ErrHandler0"
+  },
+  "active": false,
+  "pinData": {}
+}

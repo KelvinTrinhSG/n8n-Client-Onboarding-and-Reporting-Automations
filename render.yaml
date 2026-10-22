@@ -1,0 +1,100 @@
+# Render Blueprint: n8n + Postgres + Demo Portal
+# Deploy: Render Dashboard → New → Blueprint → chọn repo này.
+# Render sẽ hỏi giá trị cho các biến có `sync: false`.
+#
+# Sau khi deploy:
+#   - Gắn custom domain cho service n8n, rồi cập nhật N8N_HOST / WEBHOOK_URL / N8N_EDITOR_BASE_URL
+#   - SAO LƯU giá trị N8N_ENCRYPTION_KEY (Render tự sinh) vào nơi an toàn
+#   - Kiểm tra lại giá và tên plan trên https://render.com/pricing
+
+services:
+  # ---------- n8n ----------
+  - type: web
+    name: n8n
+    runtime: image
+    image:
+      # Pin cùng version với N8N_VERSION trong .env
+      url: docker.n8n.io/n8nio/n8n:2.44.4
+    plan: starter # KHÔNG dùng free: free sẽ ngủ, làm Schedule Trigger không chạy
+    region: singapore # phải trùng region với database
+    healthCheckPath: /healthz
+    envVars:
+      # --- Port: Render định tuyến tới PORT ---
+      - key: PORT
+        value: "5678"
+      - key: N8N_PORT
+        value: "5678"
+
+      # --- URL public (điền domain, ví dụ demo.yourname.com hoặc n8n-xxxx.onrender.com) ---
+      - key: N8N_HOST
+        sync: false
+      - key: WEBHOOK_URL # ví dụ https://demo.yourname.com/
+        sync: false
+      - key: N8N_EDITOR_BASE_URL # ví dụ https://demo.yourname.com/
+        sync: false
+      - key: N8N_PROTOCOL
+        value: https
+      - key: N8N_PROXY_HOPS # n8n chạy sau proxy của Render
+        value: "1"
+
+      # --- Database ---
+      - key: DB_TYPE
+        value: postgresdb
+      - key: DB_POSTGRESDB_HOST
+        fromDatabase:
+          name: n8n-db
+          property: host
+      - key: DB_POSTGRESDB_PORT
+        fromDatabase:
+          name: n8n-db
+          property: port
+      - key: DB_POSTGRESDB_DATABASE
+        fromDatabase:
+          name: n8n-db
+          property: database
+      - key: DB_POSTGRESDB_USER
+        fromDatabase:
+          name: n8n-db
+          property: user
+      - key: DB_POSTGRESDB_PASSWORD
+        fromDatabase:
+          name: n8n-db
+          property: password
+
+      # --- Bảo mật ---
+      - key: N8N_ENCRYPTION_KEY # sinh 1 lần khi tạo Blueprint; KHÔNG ĐỔI
+        generateValue: true
+      - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+        value: "true"
+
+      # --- Timezone ---
+      - key: GENERIC_TIMEZONE
+        value: Asia/Ho_Chi_Minh
+      - key: TZ
+        value: Asia/Ho_Chi_Minh
+
+      # --- Vận hành ---
+      - key: N8N_RUNNERS_ENABLED
+        value: "true"
+      - key: EXECUTIONS_DATA_PRUNE
+        value: "true"
+      - key: EXECUTIONS_DATA_MAX_AGE
+        value: "168"
+      - key: N8N_DIAGNOSTICS_ENABLED
+        value: "false"
+
+  # ---------- Demo Portal (static, miễn phí) ----------
+  - type: web
+    name: demo-portal
+    runtime: static
+    buildCommand: echo "no build step"
+    staticPublishPath: ./demo-portal
+
+databases:
+  - name: n8n-db
+    plan: basic-256mb # KHÔNG dùng free: Postgres free sẽ hết hạn
+    postgresMajorVersion: "17" # n8n 2.x chỉ hỗ trợ đầy đủ Postgres 17+
+    region: singapore
+    databaseName: n8n
+    user: n8n
+    ipAllowList: [] # chỉ cho phép kết nối nội bộ từ các service trên Render

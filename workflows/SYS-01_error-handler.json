@@ -1,0 +1,79 @@
+{
+  "id": "SYS01ErrHandler0",
+  "name": "[SYS-01] Global Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3b41568c-fe0f-51cc-b160-c21481922fc8",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// === CONFIG ===\n// Self-contained on purpose: if SYS-02 is broken, errors must still reach Telegram.\nconst ERRORS_CHAT_ID = 'REPLACE_WITH_TELEGRAM_ERRORS_CHAT_ID';\n\nconst d = $input.first().json;\nconst wf = d.workflow || {};\nconst ex = d.execution || {};\nconst tr = d.trigger || {}; // set instead of `execution` when the trigger node itself failed\nconst err = ex.error || tr.error || {};\n\nconst lines = [\n  '🚨 Workflow failed',\n  `Workflow: ${wf.name || 'unknown'} (${wf.id || '-'})`,\n  `Node: ${ex.lastNodeExecuted || err.node?.name || (tr.error ? 'trigger' : 'unknown')}`,\n  `Error: ${err.message || 'no message'}`,\n];\nif (err.description) lines.push(`Details: ${err.description}`);\nif (ex.url) lines.push(`Execution: ${ex.url}`);\nlines.push(`Mode: ${ex.mode || tr.mode || '-'}`);\nlines.push(`Time: ${$now.toISO()}`);\n\nlet text = lines.join('\\n');\nif (text.length > 4000) text = text.slice(0, 3990) + '…';\n\nreturn [{ json: { chat_id: ERRORS_CHAT_ID, text } }];\n"
+      },
+      "id": "06efe93a-e492-5bac-8be1-f99d1a9f156e",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "562fce40-73db-525f-8c64-c0d2b84cafbb",
+      "name": "Telegram: Send Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Send Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {}
+}

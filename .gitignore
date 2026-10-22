@@ -1,0 +1,6 @@
+.env
+*.local.json
+__pycache__/
+
+# Nội dung tin tuyển dụng Upwork gốc (của bên thứ ba), không public
+n8n Client Onboarding and Reporting Automations.txt
